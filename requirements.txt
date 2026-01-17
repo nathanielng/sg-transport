@@ -1,0 +1,6 @@
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Optional: For advanced GPS/WiFi triangulation location detection
+# Install with: pip install geocoder
+# geocoder>=1.38.1
