@@ -82,6 +82,26 @@ There's no user authentication — anyone with the URL can use the tool, so prot
 
 Worst case if the URL/key leak: the daily quota gets exhausted by someone else and you temporarily lose access to your own tool — not a runaway AWS bill. Adjust `template.yaml`'s `Throttle`/`Quota` values and redeploy if you want it tighter or looser.
 
+### Rotating the API key
+
+Deploying `scripts/deploy-frontend.sh` again does **not** rotate anything — it just re-reads whatever key is currently active and re-templates the same live page. Rotation only happens when you force API Gateway to issue a *new* key and retire the old one, which matters if the old key ended up somewhere you don't control (git history, a browser cache, a screenshot, a scraped copy of the page):
+
+1. In `template.yaml`, rename the `ApiKeyV2` resource (and its two references — `UsagePlanKey`'s `KeyId` and the `ApiKeyId` output) to a new logical ID, e.g. `ApiKeyV3`.
+2. Redeploy the backend:
+   ```bash
+   sam build
+   sam deploy --stack-name bus-stop-finder --resolve-s3 --capabilities CAPABILITY_IAM \
+     --parameter-overrides LtaApiKey=<your key> AllowedOrigin=<your origin>
+   ```
+   CloudFormation deletes the old `ApiKey` resource and creates a new one in the same update — the old key stops working immediately, regardless of who still has a copy of it.
+3. Push the new key to the live page:
+   ```bash
+   STACK_NAME=bus-stop-finder AWS_REGION=<region> S3_DEST=s3://<bucket>/<path>/index.html \
+   CLOUDFRONT_DISTRIBUTION_ID=<id> ./scripts/deploy-frontend.sh
+   ```
+
+This repo's key has already been rotated once this way (the original key committed in an early version of `frontend/index.html` is dead).
+
 ---
 
 ## CLI Tool
