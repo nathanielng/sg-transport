@@ -1,8 +1,94 @@
 # Bus Stop Finder
 
-A comprehensive tool for finding nearby bus stops and checking real-time bus arrivals in Singapore using the LTA DataMall API. Features automatic location detection, smart caching, and real-time bus arrival information.
+Tools for finding nearby bus stops and checking real-time bus arrivals in Singapore using the LTA DataMall API. This repo has two parts:
 
-## Features
+- **`bus_stop_finder.py`** — a command-line tool (IP/GPS-based location, local caching). See [CLI Tool](#cli-tool) below.
+- **`frontend/` + `lambda/` + `template.yaml`** — a mobile-friendly web app that uses the browser's GPS via `navigator.geolocation`, backed by a serverless AWS Lambda + API Gateway API. See [Mobile Web App](#mobile-web-app-aws) below.
+
+## Mobile Web App (AWS)
+
+A static single-page app (`frontend/index.html`) that gets your location from the browser and calls a Lambda-backed API (`lambda/app.py`) which proxies LTA DataMall. The LTA API key stays server-side — the frontend never sees it.
+
+### Features
+
+- 📍 Browser geolocation (`navigator.geolocation`) — works on any mobile browser over HTTPS
+- ⭐ **Favorites**: save bus stop codes to `localStorage` (device-local, never sent anywhere but the API), with auto-lookup of the stop's description as you type the code
+- 🗺️ **Map view**: optional, lazy-loaded [Leaflet](https://leafletjs.com/) map with OpenStreetMap tiles — Leaflet's JS/CSS only load the first time you switch to Map view, so the default List view stays lightweight. Tapping a pin auto-loads arrivals into its popup.
+- 🌙 **Light/dark theme toggle**, persisted locally, defaulting to your OS preference
+- Rate-limited via an API Gateway usage plan (see [Cost/Abuse Protection](#costabuse-protection)) since there's no user auth — this is meant for personal/low-traffic use
+
+### Architecture
+
+```
+Browser (geolocation, favorites in localStorage)
+   │  fetch() with x-api-key header
+   ▼
+API Gateway (usage plan: throttle + daily quota, API key required)
+   │
+   ▼
+Lambda (lambda/app.py) ── proxies ──▶ LTA DataMall API (AccountKey stays server-side)
+```
+
+Routes:
+| Route | Purpose |
+|---|---|
+| `GET /nearby?lat=&lon=&radius=` | Bus stops within `radius` km (default 0.5, capped 0.1–5) of a coordinate |
+| `GET /arrival?busStopCode=` | Real-time arrivals for a stop |
+| `GET /stop?code=` | Look up a stop's description/road name by code (used for favorites) |
+
+The frontend is a static file — host it however you like (S3 + CloudFront, GitHub Pages, etc.). It is **not** included in the SAM stack; deploy it separately.
+
+### Deploying the backend
+
+Requires [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) and Python 3.12 available locally (`brew install aws-sam-cli python@3.12` on macOS).
+
+```bash
+sam build
+sam deploy --guided \
+  --parameter-overrides LtaApiKey=<your LTA DataMall AccountKey> AllowedOrigin=<your frontend's origin, e.g. https://example.cloudfront.net>
+```
+
+### Deploying the frontend
+
+`frontend/index.html` is committed with placeholders (`__API_URL__`, `__API_KEY__`) — **not** real values, so the file in git never contains a live credential. The real values are filled in only at upload time by `scripts/deploy-frontend.sh`, which reads them from the deployed stack and writes the filled-in copy to a gitignored `.build/` directory:
+
+```bash
+STACK_NAME=bus-stop-finder \
+AWS_REGION=ap-southeast-1 \
+S3_DEST=s3://<your-bucket>/<path>/index.html \
+CLOUDFRONT_DISTRIBUTION_ID=<your distribution id>   # optional, invalidates the cache after upload
+./scripts/deploy-frontend.sh
+```
+
+Swap the `S3_DEST` line for whatever static host you use if not S3+CloudFront — the templating step (`sed` on the two placeholders) works the same regardless of where the file ends up.
+
+#### Tradeoff: this only keeps the key out of git, not off the internet
+
+Templating at deploy time solves **"don't put the key in version control history"** — a real concern for a public repo, since git history is effectively permanent and searchable. It does **not** make the key secret at runtime: anyone who visits the live page can find it instantly via view-source, browser devtools' Network tab, or just downloading the HTML. That's inherent to any purely static frontend calling a key-gated API — the key has to ship to the browser somehow.
+
+That's an acceptable tradeoff *only* because this key is deliberately not a bearer of real privilege — it's gated by the usage plan (rate/burst/daily quota in [Cost/Abuse Protection](#costabuse-protection)), so a leaked key costs you quota, not money or data. If that's not comfortable enough for your use case, the actual fixes are:
+
+- **Rotate periodically**: re-deploy with a renamed `ApiKeyV2`-style resource in `template.yaml` (CloudFormation replaces it, deleting the old key) whenever you suspect exposure — this repo's key has already been rotated once this way.
+- **Real auth**: put a Cognito User Pool (or any login) in front, and have API Gateway validate a per-user JWT instead of a shared static key — closes the "anyone can see it in devtools" gap entirely, at the cost of adding a login flow.
+- **Keep the repo private**: if the frontend source doesn't need to be public, a private GitHub repo removes the "git history is public forever" half of the concern, though the *deployed page* is still whatever you choose to make public regardless of repo visibility.
+
+### Cost/abuse protection
+
+There's no user authentication — anyone with the URL can use the tool, so protection is capped blast radius rather than access control:
+
+- **API Gateway usage plan**: 2 requests/sec, burst 3, **500 requests/day** total (shared across all callers, not per-user)
+- **API key required** on every route — lets you rotate/revoke without redeploying Lambda
+- **CORS** restricted to the `AllowedOrigin` you deploy with, so other websites' JS can't call your API using a leaked key (browsers only — doesn't stop direct API calls, e.g. via curl)
+
+Worst case if the URL/key leak: the daily quota gets exhausted by someone else and you temporarily lose access to your own tool — not a runaway AWS bill. Adjust `template.yaml`'s `Throttle`/`Quota` values and redeploy if you want it tighter or looser.
+
+---
+
+## CLI Tool
+
+A comprehensive command-line tool for finding bus stops and checking real-time bus arrivals in Singapore.
+
+### Features
 
 - **Real-Time Bus Arrivals**: Check arrival times for buses at any bus stop
 - **Automatic Location Detection**: Uses IP geolocation or advanced GPS/WiFi triangulation

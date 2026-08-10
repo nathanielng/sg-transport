@@ -70,12 +70,12 @@ Resources:
             Auth:
               ApiKeyRequired: true
 
-  ApiKey:
+  ApiKeyV2:
     Type: AWS::ApiGateway::ApiKey
     DependsOn:
       - BusStopFinderApiprodStage
     Properties:
-      Name: bus-stop-finder-frontend-key
+      Name: bus-stop-finder-frontend-key-v2
       Enabled: true
       StageKeys:
         - RestApiId: !Ref BusStopFinderApi
@@ -100,7 +100,7 @@ Resources:
   UsagePlanKey:
     Type: AWS::ApiGateway::UsagePlanKey
     Properties:
-      KeyId: !Ref ApiKey
+      KeyId: !Ref ApiKeyV2
       KeyType: API_KEY
       UsagePlanId: !Ref UsagePlan
 
@@ -112,4 +112,4 @@ Outputs:
     Description: >
       API Key ID - fetch the actual key value with:
       aws apigateway get-api-key --api-key <ApiKeyId> --include-value --query value --output text
-    Value: !Ref ApiKey
+    Value: !Ref ApiKeyV2

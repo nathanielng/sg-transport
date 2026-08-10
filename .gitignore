@@ -8,3 +8,6 @@ data/bus_stops.json
 # SAM build artifacts
 .aws-sam/
 samconfig.toml
+
+# frontend deploy script output (real API_URL/API_KEY filled in, never committed)
+.build/
