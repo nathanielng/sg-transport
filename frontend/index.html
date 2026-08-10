@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bus Stop Finder</title>
+<script>
+  (function () {
+    const saved = localStorage.getItem("busStopTheme");
+    if (saved) document.documentElement.setAttribute("data-theme", saved);
+  })();
+</script>
+<style>
+  :root, :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --text: #1a1a1a;
+    --text-muted: #666;
+    --text-faint: #888;
+    --border: #ddd;
+    --input-border: #ccc;
+    --accent: #4a7fd1;
+    --accent-text: #ffffff;
+    --toggle-bg: #e5e5e5;
+    --toggle-text: #333;
+    --danger: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { color-scheme: dark; --bg: #16181c; --text: #e8e8e8; --text-muted: #a0a0a0; --text-faint: #808080;
+      --border: #333; --input-border: #444; --accent: #5b8fe0; --accent-text: #ffffff; --toggle-bg: #2a2c30; --toggle-text: #ccc; --danger: #e0685a; }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #16181c; --text: #e8e8e8; --text-muted: #a0a0a0; --text-faint: #808080;
+    --border: #333; --input-border: #444; --accent: #5b8fe0; --accent-text: #ffffff; --toggle-bg: #2a2c30; --toggle-text: #ccc; --danger: #e0685a;
+  }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 1rem; max-width: 480px; margin-inline: auto; background: var(--bg); color: var(--text); }
+  .header-row { display: flex; align-items: center; justify-content: space-between; }
+  h1 { font-size: 1.25rem; margin: 0; }
+  h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; }
+  #theme-toggle { width: auto; padding: 0.4rem 0.6rem; font-size: 1rem; background: var(--toggle-bg); color: var(--toggle-text); }
+  button { padding: 0.9rem; font-size: 1rem; border-radius: 0.5rem; border: none; background: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: 0.6; }
+  #locate { width: 100%; }
+  #status { margin: 0.75rem 0; color: var(--text-muted); font-size: 0.9rem; }
+  ul { list-style: none; padding: 0; margin: 0.5rem 0; }
+  li { padding: 0.75rem 0; border-bottom: 1px solid var(--border); position: relative; }
+  .code { font-weight: 600; }
+  .dist { float: right; color: var(--text-muted); }
+  .arrivals { margin-top: 0.35rem; font-size: 0.9rem; color: var(--text); }
+  .star-btn { position: absolute; right: 0; top: 0.6rem; background: none; border: none; font-size: 1.2rem; padding: 0.2rem 0.4rem; cursor: pointer; width: auto; }
+  .remove-btn { position: absolute; right: 0; top: 0.6rem; background: none; border: none; font-size: 0.85rem; color: var(--danger); padding: 0.2rem 0.4rem; cursor: pointer; width: auto; }
+  .add-favorite { display: flex; gap: 0.4rem; margin: 0.5rem 0; }
+  .add-favorite input { flex: 1; padding: 0.6rem; font-size: 0.95rem; border-radius: 0.5rem; border: 1px solid var(--input-border); background: var(--bg); color: var(--text); }
+  .add-favorite button { width: auto; padding: 0.6rem 0.9rem; }
+  .empty { color: var(--text-faint); font-size: 0.9rem; }
+  .view-toggle { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+  .view-toggle button { flex: 1; background: var(--toggle-bg); color: var(--toggle-text); }
+  .view-toggle button.active { background: var(--accent); color: var(--accent-text); }
+  #map { height: 60vh; margin-top: 0.5rem; border-radius: 0.5rem; display: none; }
+  .popup-arrivals { margin-top: 0.35rem; font-size: 0.85rem; }
+  .text-muted { color: var(--text-muted); }
+  .text-faint { color: var(--text-faint); }
+  .refresh-btn { width: auto; padding: 0.4rem 0.7rem; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <div class="header-row">
+    <h1>🚌 Bus Stop Finder</h1>
+    <button id="theme-toggle">🌙</button>
+  </div>
+
+  <h2>⭐ Favorites</h2>
+  <div class="add-favorite">
+    <input id="fav-code" type="text" inputmode="numeric" placeholder="Bus stop code, e.g. 19011" />
+    <input id="fav-label" type="text" placeholder="Label (optional)" />
+    <button id="fav-add">Add</button>
+  </div>
+  <div id="fav-lookup" class="text-muted" style="font-size:0.85rem;margin-bottom:0.5rem;"></div>
+  <ul id="favorites"></ul>
+
+  <h2>Nearby</h2>
+  <button id="locate">Find stops near me</button>
+  <div class="view-toggle">
+    <button id="view-list" class="active">List</button>
+    <button id="view-map">Map</button>
+  </div>
+  <div id="status"></div>
+  <ul id="results"></ul>
+  <div id="map"></div>
+
+  <script>
+    const API_URL = "https://lot5kgwmef.execute-api.ap-southeast-1.amazonaws.com/prod";
+    const API_KEY = "l3gAGMRuqv35rfUuHENsP8ffUjHGDzty3qbVHqB6";
+    const FAVORITES_KEY = "busStopFavorites";
+    const THEME_KEY = "busStopTheme";
+
+    const themeToggleBtn = document.getElementById("theme-toggle");
+
+    function systemPrefersDark() {
+      return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+
+    function currentTheme() {
+      return document.documentElement.getAttribute("data-theme") || (systemPrefersDark() ? "dark" : "light");
+    }
+
+    function applyTheme(theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      localStorage.setItem(THEME_KEY, theme);
+      themeToggleBtn.textContent = theme === "dark" ? "☀️" : "🌙";
+    }
+
+    themeToggleBtn.textContent = currentTheme() === "dark" ? "☀️" : "🌙";
+    themeToggleBtn.addEventListener("click", () => {
+      applyTheme(currentTheme() === "dark" ? "light" : "dark");
+    });
+
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+    const favoritesEl = document.getElementById("favorites");
+    const locateButton = document.getElementById("locate");
+    const mapEl = document.getElementById("map");
+    const viewListBtn = document.getElementById("view-list");
+    const viewMapBtn = document.getElementById("view-map");
+
+    let currentView = "list";
+    let lastStops = [];
+    let lastUserLocation = null;
+    let leafletLoadPromise = null;
+    let map = null;
+    let markers = [];
+
+    function loadLeaflet() {
+      if (leafletLoadPromise) return leafletLoadPromise;
+      leafletLoadPromise = new Promise((resolve, reject) => {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+        document.head.appendChild(link);
+
+        const script = document.createElement("script");
+        script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+        script.onload = resolve;
+        script.onerror = reject;
+        document.body.appendChild(script);
+      });
+      return leafletLoadPromise;
+    }
+
+    async function showView(view) {
+      currentView = view;
+      viewListBtn.classList.toggle("active", view === "list");
+      viewMapBtn.classList.toggle("active", view === "map");
+      resultsEl.style.display = view === "list" ? "" : "none";
+      mapEl.style.display = view === "map" ? "block" : "none";
+
+      if (view === "map") {
+        await loadLeaflet();
+        if (!map) {
+          map = L.map("map").setView([1.3521, 103.8198], 12);
+          L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: "&copy; OpenStreetMap contributors",
+          }).addTo(map);
+        }
+        setTimeout(() => map.invalidateSize(), 50);
+        renderMapMarkers();
+      }
+    }
+
+    viewListBtn.addEventListener("click", () => showView("list"));
+    viewMapBtn.addEventListener("click", () => showView("map"));
+
+    function renderMapMarkers() {
+      if (!map) return;
+      markers.forEach((m) => map.removeLayer(m));
+      markers = [];
+
+      if (lastUserLocation) {
+        const userMarker = L.circleMarker([lastUserLocation.lat, lastUserLocation.lon], {
+          radius: 6,
+          color: "#0b6efd",
+          fillColor: "#0b6efd",
+          fillOpacity: 0.8,
+        }).addTo(map);
+        markers.push(userMarker);
+      }
+
+      lastStops.forEach((s) => {
+        const marker = L.marker([s.Latitude, s.Longitude]).addTo(map);
+        marker.bindPopup(buildPopupContent(s, "Loading arrivals&hellip;"), { maxWidth: 220 });
+        marker.on("popupopen", (e) => loadPopupArrivals(s, e.popup));
+        markers.push(marker);
+      });
+
+      if (lastStops.length) {
+        const bounds = L.latLngBounds(lastStops.map((s) => [s.Latitude, s.Longitude]));
+        if (lastUserLocation) bounds.extend([lastUserLocation.lat, lastUserLocation.lon]);
+        map.fitBounds(bounds, { padding: [30, 30] });
+      }
+    }
+
+    function buildPopupContent(s, arrivalsHtml) {
+      return `
+        <strong>${s.BusStopCode}</strong> &middot; ${s.Distance} m<br/>
+        ${s.Description} (${s.RoadName})
+        <div class="popup-arrivals">${arrivalsHtml}</div>`;
+    }
+
+    async function loadPopupArrivals(s, popup) {
+      try {
+        const url = `${API_URL}/arrival?busStopCode=${s.BusStopCode}`;
+        const res = await fetch(url, { headers: { "x-api-key": API_KEY } });
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+        const data = await res.json();
+        const services = data.Services || [];
+        const html = services.length
+          ? services
+              .map((svc) => `${svc.ServiceNo}: ${minutesUntil(svc.NextBus && svc.NextBus.EstimatedArrival)}`)
+              .join(" &nbsp;|&nbsp; ")
+          : "No buses currently serving this stop.";
+        popup.setContent(buildPopupContent(s, html));
+      } catch (e) {
+        popup.setContent(buildPopupContent(s, `Failed to load arrivals: ${e.message}`));
+      }
+    }
+
+    function getFavorites() {
+      try {
+        return JSON.parse(localStorage.getItem(FAVORITES_KEY)) || [];
+      } catch {
+        return [];
+      }
+    }
+
+    function saveFavorites(favorites) {
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
+    }
+
+    function isFavorite(code) {
+      return getFavorites().some((f) => f.code === code);
+    }
+
+    function addFavorite(code, label, description, roadName) {
+      const favorites = getFavorites();
+      if (favorites.some((f) => f.code === code)) return;
+      favorites.push({ code, label: label || "", description: description || "", roadName: roadName || "" });
+      saveFavorites(favorites);
+      renderFavorites();
+    }
+
+    function removeFavorite(code) {
+      saveFavorites(getFavorites().filter((f) => f.code !== code));
+      renderFavorites();
+    }
+
+    function renderFavorites() {
+      const favorites = getFavorites();
+      if (!favorites.length) {
+        favoritesEl.innerHTML = '<li class="empty">No favorites yet. Add a bus stop code above, or tap ☆ on a nearby stop.</li>';
+        return;
+      }
+
+      favoritesEl.innerHTML = favorites
+        .map((f) => {
+          const title = f.label || f.description || `Stop ${f.code}`;
+          const subtitle = [f.description, f.roadName].filter(Boolean).join(" · ");
+          return `
+        <li data-code="${f.code}">
+          <button class="remove-btn" data-action="remove" data-code="${f.code}">remove</button>
+          <span class="code">${title}</span> <span class="text-faint">(${f.code})</span><br/>
+          ${subtitle ? `<span class="text-muted" style="font-size:0.85rem">${subtitle}</span><br/>` : ""}
+          <div class="arrivals" id="fav-arrivals-${f.code}">
+            <button class="refresh-btn" data-action="refresh" data-code="${f.code}">↻ Load arrivals</button>
+          </div>
+        </li>`;
+        })
+        .join("");
+
+      favoritesEl.querySelectorAll('[data-action="remove"]').forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          removeFavorite(btn.dataset.code);
+        });
+      });
+
+      favoritesEl.querySelectorAll('[data-action="refresh"]').forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          loadArrivals(btn.dataset.code, `fav-arrivals-${btn.dataset.code}`);
+        });
+      });
+    }
+
+    let lookupTimer = null;
+    let lookedUpStop = null;
+    const favLookupEl = document.getElementById("fav-lookup");
+
+    document.getElementById("fav-code").addEventListener("input", (e) => {
+      const code = e.target.value.trim();
+      lookedUpStop = null;
+      clearTimeout(lookupTimer);
+
+      if (!code) {
+        favLookupEl.textContent = "";
+        return;
+      }
+
+      lookupTimer = setTimeout(async () => {
+        favLookupEl.textContent = "Looking up…";
+        try {
+          const res = await fetch(`${API_URL}/stop?code=${encodeURIComponent(code)}`, {
+            headers: { "x-api-key": API_KEY },
+          });
+          if (res.status === 404) {
+            favLookupEl.textContent = "No bus stop found with that code.";
+            return;
+          }
+          if (!res.ok) throw new Error(`API error ${res.status}`);
+          const stop = await res.json();
+          lookedUpStop = stop;
+          favLookupEl.textContent = `${stop.Description} · ${stop.RoadName}`;
+        } catch (err) {
+          favLookupEl.textContent = `Lookup failed: ${err.message}`;
+        }
+      }, 500);
+    });
+
+    document.getElementById("fav-add").addEventListener("click", () => {
+      const codeInput = document.getElementById("fav-code");
+      const labelInput = document.getElementById("fav-label");
+      const code = codeInput.value.trim();
+      if (!code) return;
+
+      const description = lookedUpStop && lookedUpStop.BusStopCode === code ? lookedUpStop.Description : "";
+      const roadName = lookedUpStop && lookedUpStop.BusStopCode === code ? lookedUpStop.RoadName : "";
+      addFavorite(code, labelInput.value.trim(), description, roadName);
+
+      codeInput.value = "";
+      labelInput.value = "";
+      favLookupEl.textContent = "";
+      lookedUpStop = null;
+    });
+
+    locateButton.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        statusEl.textContent = "Geolocation is not supported by this browser.";
+        return;
+      }
+
+      locateButton.disabled = true;
+      statusEl.textContent = "Getting your location…";
+      resultsEl.innerHTML = "";
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          findNearbyStops(latitude, longitude);
+        },
+        (err) => {
+          statusEl.textContent = `Location error: ${err.message}`;
+          locateButton.disabled = false;
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    });
+
+    async function findNearbyStops(lat, lon) {
+      statusEl.textContent = "Searching for nearby stops…";
+      try {
+        const url = `${API_URL}/nearby?lat=${lat}&lon=${lon}&radius=0.5`;
+        const res = await fetch(url, { headers: { "x-api-key": API_KEY } });
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+        const data = await res.json();
+        lastStops = data.stops;
+        lastUserLocation = { lat, lon };
+        renderStops(data.stops);
+        if (currentView === "map") renderMapMarkers();
+      } catch (e) {
+        statusEl.textContent = `Failed to load bus stops: ${e.message}`;
+      } finally {
+        locateButton.disabled = false;
+      }
+    }
+
+    function renderStops(stops) {
+      if (!stops.length) {
+        statusEl.textContent = "No bus stops found nearby.";
+        resultsEl.innerHTML = "";
+        return;
+      }
+      statusEl.textContent = `Found ${stops.length} stop(s):`;
+      resultsEl.innerHTML = stops
+        .map(
+          (s) => `
+        <li data-code="${s.BusStopCode}">
+          <button class="star-btn" data-action="star" data-code="${s.BusStopCode}"
+            data-description="${s.Description}" data-road="${s.RoadName}">${isFavorite(s.BusStopCode) ? "★" : "☆"}</button>
+          <span class="code">${s.BusStopCode}</span>
+          <span class="dist">${s.Distance} m</span><br/>
+          ${s.Description} (${s.RoadName})
+          <div class="arrivals" id="arrivals-${s.BusStopCode}">Tap to load arrivals</div>
+        </li>`
+        )
+        .join("");
+
+      resultsEl.querySelectorAll("li").forEach((li) => {
+        li.addEventListener("click", (e) => {
+          if (e.target.dataset.action === "star") return;
+          loadArrivals(li.dataset.code, `arrivals-${li.dataset.code}`);
+        });
+      });
+
+      resultsEl.querySelectorAll('[data-action="star"]').forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          addFavorite(btn.dataset.code, "", btn.dataset.description, btn.dataset.road);
+          btn.textContent = "★";
+        });
+      });
+    }
+
+    async function loadArrivals(busStopCode, targetElId) {
+      const el = document.getElementById(targetElId);
+      if (!el) return;
+      el.textContent = "Loading arrivals…";
+      try {
+        const url = `${API_URL}/arrival?busStopCode=${busStopCode}`;
+        const res = await fetch(url, { headers: { "x-api-key": API_KEY } });
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+        const data = await res.json();
+        const services = data.Services || [];
+        if (!services.length) {
+          el.textContent = "No buses currently serving this stop.";
+          return;
+        }
+        el.innerHTML = services
+          .map((svc) => {
+            const mins = minutesUntil(svc.NextBus && svc.NextBus.EstimatedArrival);
+            return `${svc.ServiceNo}: ${mins}`;
+          })
+          .join(" &nbsp;|&nbsp; ");
+      } catch (e) {
+        el.textContent = `Failed to load arrivals: ${e.message}`;
+      }
+    }
+
+    function minutesUntil(isoString) {
+      if (!isoString) return "N/A";
+      const diffMs = new Date(isoString) - new Date();
+      const mins = Math.round(diffMs / 60000);
+      return mins < 1 ? "Arriving" : `${mins} min`;
+    }
+
+    renderFavorites();
+  </script>
+</body>
+</html>

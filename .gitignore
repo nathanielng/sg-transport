@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/bus_stops_cache.json
+data/bus_stops.json
+
+# SAM build artifacts
+.aws-sam/
+samconfig.toml

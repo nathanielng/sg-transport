@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Bus Stop Finder API - Lambda proxy for LTA DataMall, fronted by API Gateway
+  with an API key + usage plan for cost/abuse protection.
+
+Parameters:
+  LtaApiKey:
+    Type: String
+    NoEcho: true
+    Description: LTA DataMall AccountKey (kept server-side, never shipped to the browser)
+  AllowedOrigin:
+    Type: String
+    Default: "*"
+    Description: CloudFront/S3 origin allowed to call this API (set to your frontend domain in prod)
+
+Globals:
+  Api:
+    Cors:
+      AllowMethods: "'GET,OPTIONS'"
+      AllowHeaders: "'Content-Type,X-Api-Key'"
+      AllowOrigin: !Sub "'${AllowedOrigin}'"
+
+Resources:
+  BusStopFinderApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingRateLimit: 2
+          ThrottlingBurstLimit: 3
+
+  BusStopFinderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          LTA_API_KEY: !Ref LtaApiKey
+          ALLOWED_ORIGIN: !Ref AllowedOrigin
+      Events:
+        Nearby:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BusStopFinderApi
+            Path: /nearby
+            Method: GET
+            Auth:
+              ApiKeyRequired: true
+        Arrival:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BusStopFinderApi
+            Path: /arrival
+            Method: GET
+            Auth:
+              ApiKeyRequired: true
+        Stop:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BusStopFinderApi
+            Path: /stop
+            Method: GET
+            Auth:
+              ApiKeyRequired: true
+
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn:
+      - BusStopFinderApiprodStage
+    Properties:
+      Name: bus-stop-finder-frontend-key
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref BusStopFinderApi
+          StageName: prod
+
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - BusStopFinderApiprodStage
+    Properties:
+      UsagePlanName: bus-stop-finder-usage-plan
+      Throttle:
+        RateLimit: 2
+        BurstLimit: 3
+      Quota:
+        Limit: 500
+        Period: DAY
+      ApiStages:
+        - ApiId: !Ref BusStopFinderApi
+          Stage: prod
+
+  UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+Outputs:
+  ApiUrl:
+    Description: Base URL for the API
+    Value: !Sub "https://${BusStopFinderApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  ApiKeyId:
+    Description: >
+      API Key ID - fetch the actual key value with:
+      aws apigateway get-api-key --api-key <ApiKeyId> --include-value --query value --output text
+    Value: !Ref ApiKey
